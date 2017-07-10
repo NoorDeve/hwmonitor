@@ -5,7 +5,7 @@ public class Record
 {
     public enum DataPoint
     {
-        M4ATXTemperature = 0,
+        M4ATXTemperature ,
         M4ATXVoltageIn,
         CPUCore0Temperature,
         CPUCore1Temperature,
@@ -15,7 +15,10 @@ public class Record
         GPUCoreTemperature,
         CPUPackagePower,
         CPUCoresPower,
-        CPUDRAMPower
+        CPUDRAMPower,
+        VoltageOn12V,
+        VoltageOn3V,
+        VoltageOn5V
     }
 
     /* this magic gives us number of enums defined */

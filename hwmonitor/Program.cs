@@ -1,6 +1,14 @@
 using System;
 using System.IO;
 using System.Threading;
+using Amazon;
+using Amazon.Kinesis.Model;
+using Newtonsoft.Json;
+using System.Collections.Generic;
+//using System.Linq;
+using System.Text;
+//using System.Threading.Tasks;
+//using Amazon.Runtime.Internal.Auth;
 
 
 class Program
@@ -9,7 +17,7 @@ class Program
     const string ReportFile = "HardwareMonitorReport.txt";
     /* time between we fetch new hardware reports, in miliseconds */
     const int ReportRate = 5000;
-
+    static KinesisLog log = null;
 
     /*
      * Max length, in bytes, of the report file, before it is trimmed.
@@ -70,30 +78,53 @@ class Program
         ReportStream = new StreamWriter(path, true);
 
         WriteLine(
-        "--------------------+-------------+---------------------------------------+-------------+-------------------------------+------------" + Environment.NewLine +
-        "     Timestamp      |  M4ATX PSU  |           CPU Temperature             |     GPU     |           CPU Power           |  M4ATX PSU" + Environment.NewLine +
-        "  (UTC time zone)   | temperature |   PKG   Core0  Core1  Core02  Core03  | temperature |     PKG    Cores     DRAM     | Voltage IN" + Environment.NewLine +
-        "--------------------+-------------+---------------------------------------+-------------+-------------------------------+------------"
+        "--------------------+-------------+---------------------------------------+-------------+-------------------------------+------------+--------------+-------------+-------------" + Environment.NewLine +
+        "     Timestamp      |  M4ATX PSU  |           CPU Temperature             |     GPU     |           CPU Power           |  M4ATX PSU +  M4ATX PSU   +  M4ATX PSU  +  M4ATX PSU- " + Environment.NewLine +
+        "  (UTC time zone)   | temperature |   PKG   Core0  Core1  Core02  Core03  | temperature |     PKG    Cores     DRAM     | Voltage IN + VoltageOn12V + VoltageOn3V + VoltageOn5V " + Environment.NewLine +
+        "--------------------+-------------+---------------------------------------+-------------+-------------------------------+------------+--------------+-------------+-------------"
                   );
     }
 
+    static void Initki()
+    {
+
+        Kinesis x;
+        using (StreamReader r = new StreamReader("kinesisLog.json"))
+        {
+            string json = r.ReadToEnd();
+            Console.WriteLine(json);
+            x = JsonConvert.DeserializeObject<Kinesis>(json);
+            
+        }
+        //Console.WriteLine(x.awsAccessKeyID);
+        log = new KinesisLog(x.awsAccessKeyID, x.awsSecretAccessKey, RegionEndpoint.EUCentral1, "test", "PartitionKey");
+        Console.WriteLine("Successfully connect to Kinesis ");
+
+
+    }
     static void WriteLine(string line)
     {
+
         /* write report to console for debugging purpuses */
         Console.WriteLine(line);
 
         /* write report to the file */
         ReportStream.WriteLine(line);
         ReportStream.Flush();
+
+        
     }
+
+
 
     static void LogException(Exception e)
     {
         WriteLine(e.ToString());
     }
-
+   
     static void Init()
     {
+        
         OpenReportStream();
         try
         {
@@ -109,10 +140,103 @@ class Program
             LogException(e);
         }
         Motherboard.Init();
+        Initki();
+
+
+    }
+
+    static void SendToKinesis(Record record)
+    {
+        /* send to kinesis stream */
+        Object val;
+        DataRecord dr = new DataRecord();
+        val= record.Get(Record.DataPoint.CPUCore0Temperature);
+        if(val!=null)
+        {
+            dr.CPUCore0Temperature = (float)val;
+        }
+        val= record.Get(Record.DataPoint.CPUCore1Temperature);
+        if (val != null)
+        {
+            dr.CPUCore1Temperature = (float)val;
+        }
+        val= record.Get(Record.DataPoint.CPUCore2Temperature); 
+        if(val!=null)
+        {
+            dr.CPUCore2Temperature = (float)val;
+        }
+        val= record.Get(Record.DataPoint.CPUCore3Temperature);
+        if(val!=null)
+        {
+            dr.CPUCore3Temperature = (float)val;
+        }
+        val= record.Get(Record.DataPoint.CPUCoresPower);
+        if(val!=null)
+        {
+            dr.CPUCoresPower = (float)val;
+        }
+       
+        val = record.Get(Record.DataPoint.CPUDRAMPower);
+        if (val != null)
+        {
+            dr.CPUDRAMPower = (float)val;
+        }
+        
+        val= record.Get(Record.DataPoint.CPUPackagePower);
+        if(val!=null)
+        {
+            dr.CPUPackagePower = (float)val;
+        }
+        
+        val= record.Get(Record.DataPoint.CPUPackageTemperature);
+        if(val!=null)
+        {
+            dr.CPUPackageTemperature = (float)val;
+        }
+        
+        val= record.Get(Record.DataPoint.GPUCoreTemperature);
+        if(val!=null)
+        {
+            dr.GPUCoreTemperature = (float)val;
+        }
+
+        val = record.Get(Record.DataPoint.M4ATXTemperature);
+        if (val != null)
+        {
+            dr.M4ATXTemperature = (float)val;
+
+        }
+
+        val = record.Get(Record.DataPoint.M4ATXVoltageIn);
+        if (val != null)
+        {
+            dr.M4ATXVoltageIn = (float)val;
+        }
+
+
+        string dataAsJson = JsonConvert.SerializeObject(dr);
+        byte[] dataAsBytes = Encoding.UTF8.GetBytes(dataAsJson);
+
+        using (MemoryStream memoryStream = new MemoryStream(dataAsBytes))
+            try
+            {
+                PutRecordRequest requestRecord = new PutRecordRequest();
+                requestRecord.StreamName = "test";
+                requestRecord.PartitionKey = "PartitionKey";
+                requestRecord.Data = memoryStream;
+                PutRecordResponse responseRecord = log.KinesisClient.PutRecord(requestRecord);
+                Console.WriteLine("Successfully sent record {0} to Kinesis. Sequence number: {1}", dr, responseRecord.SequenceNumber);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Failed to send record {0} to Kinesis. Exception: {1}", dr, ex.Message);
+            }
+
     }
 
     static void FetchAndLogRecord(Record record)
     {
+        
         string line;
         try
         {
@@ -124,9 +248,11 @@ class Program
         }
 
         Motherboard.Update(record);
+        SendToKinesis(record);
+
 
         line = string.Format(
-"{0} |     {1}\x00B0     |    {2}\x00B0    {3}\x00B0    {4}\x00B0    {5}\x00B0    {6}\x00B0    |     {7}\x00B0     |    {8,4:#0.0}W    {9,4:#0.0}W    {10,4:#0.0}W    |   {11:#0.0}V",
+"{0} |     {1}\x00B0     |    {2}\x00B0    {3}\x00B0    {4}\x00B0    {5}\x00B0    {6}\x00B0    |     {7}\x00B0     |    {8,4:#0.0}W    {9,4:#0.0}W    {10,4:#0.0}W    |   {11,4:#0.0}V           {12,4:#0.0}V           {13,4:#0.0}V          {14,4:#0.0}V  ",
 
             DateTime.UtcNow,
             record.Get(Record.DataPoint.M4ATXTemperature),
@@ -142,17 +268,21 @@ class Program
             record.Get(Record.DataPoint.CPUPackagePower),
             record.Get(Record.DataPoint.CPUCoresPower),
             record.Get(Record.DataPoint.CPUDRAMPower),
-            record.Get(Record.DataPoint.M4ATXVoltageIn)
+            record.Get(Record.DataPoint.M4ATXVoltageIn),
+            record.Get(Record.DataPoint.VoltageOn12V),
+            record.Get(Record.DataPoint.VoltageOn3V),
+            record.Get(Record.DataPoint.VoltageOn5V)
             );
-
+        
         WriteLine(line);
 
     }
 
     static void Main(string[] args)
     {
+        
         Init();
-
+        
         /* reuse same record object to save a bit on GC */
         Record record = new Record();
         while (true)

@@ -23,6 +23,12 @@ class M4ATX
         // Find M4ATX PSU Device
         //MyUsbDevice = UsbDevice.OpenUsbDevice(MyUsbFinder); /* Does not work for whatever reason */
 
+        if (MyUsbDevice != null && MyUsbDevice.IsOpen)
+        {
+            MyUsbDevice.Close();
+        }
+
+
         /* Iterate over USB devices until we find the M4ATX device */
         UsbRegDeviceList allDevices = UsbDevice.AllDevices;
         foreach (UsbRegistry usbRegistry in allDevices)
@@ -68,24 +74,30 @@ class M4ATX
             /* we failed to connect to M4ATX device, nothing to do here */
             return;
         }
-
-        UsbEndpointWriter writer = MyUsbDevice.OpenEndpointWriter(WriteEndpointID.Ep01);
-
-        // specify data to send
-        ec = writer.Write(new byte[] { 0x81, 0x00 }, 5000, out bytesWritten);
-
-        if (ec != ErrorCode.None)
+        try
         {
-            throw new Exception("M4ATX: Error sending command: " + ec);
+            UsbEndpointWriter writer = MyUsbDevice.OpenEndpointWriter(WriteEndpointID.Ep01);
+
+            // specify data to send
+            ec = writer.Write(new byte[] { 0x81, 0x00 }, 5000, out bytesWritten);
+
+            if (ec != ErrorCode.None)
+            {
+                throw new Exception("M4ATX: Error sending command: " + ec);
+            }
+
+            // open read endpoint 1.
+            UsbEndpointReader reader = MyUsbDevice.OpenEndpointReader(ReadEndpointID.Ep01);
+
+            // If the device hasn't sent data in the last 5 seconds,
+            // a timeout error (ec = IoTimedOut) will occur.
+            reader.Read(readBuffer, 3000, out bytesRead);
         }
-
-        // open read endpoint 1.
-        UsbEndpointReader reader = MyUsbDevice.OpenEndpointReader(ReadEndpointID.Ep01);
-
-        // If the device hasn't sent data in the last 5 seconds,
-        // a timeout error (ec = IoTimedOut) will occur.
-        reader.Read(readBuffer, 3000, out bytesRead);
-
+        catch
+        {
+            Init();
+            return;
+        }
         if (ec != ErrorCode.None || bytesRead != readBuffer.Length)
         {
             var msg = string.Format("M4ATX: Error reading result, error {0}, got {1} bytes",
@@ -93,7 +105,11 @@ class M4ATX
             throw new Exception(msg);
         }
 
-        Record.Set(Record.DataPoint.M4ATXTemperature, readBuffer[12]);
-        Record.Set(Record.DataPoint.M4ATXVoltageIn, readBuffer[2]);
+        Console.WriteLine("");
+        Record.Set(Record.DataPoint.M4ATXTemperature, (float)readBuffer[12]);
+        Record.Set(Record.DataPoint.M4ATXVoltageIn,(float) (readBuffer[2] * 0.1552));
+        Record.Set(Record.DataPoint.VoltageOn12V, (float)(readBuffer[6] * 0.1165));
+        Record.Set(Record.DataPoint.VoltageOn3V,(float)(readBuffer[4] * 0.0195));
+        Record.Set(Record.DataPoint.VoltageOn5V, (float)(readBuffer[5] * 0.0389));
     }
 }
